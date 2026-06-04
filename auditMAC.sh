@@ -1,14 +1,12 @@
 #!/bin/bash
 
 # ========================================
-# macOS Security / Hardening Report
+# macOS Security / Audit Report
 # Author: Bartłomiej
-# Version: 1.0
+# Version: 1.1
 # Developed with assistance from AI tools
 # and public security documentation.
 # ========================================
-
-
 
 clear
 
@@ -20,13 +18,9 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 
 AUTHOR="Author: Bartłomiej Pogwizd / youtube.com/pTech"
-VERSION="Version: 1.0"
+VERSION="Version: 1.1"
 
-
-
-
-
-TITLE="macOS Security / Hardening Report"
+TITLE="macOS Security / Audit Report"
 LINE="========================================"
 
 PASS_COUNT=0
@@ -80,7 +74,12 @@ check_contains() {
     echo "$value" | grep -qi "$needle"
 }
 
-
+# Sprawdzenie wersji macOS
+macos_version() {
+    sw_vers -productVersion 2>/dev/null
+}
+MACOS_MAJOR=$(macos_version | cut -d. -f1)
+MACOS_MINOR=$(macos_version | cut -d. -f2)
 
 echo -e "${BLUE}Administrator privileges are required for selected security checks.${NC}"
 echo -e "${BLUE}sudo access is used locally only and no credentials are stored.${NC}"
@@ -129,18 +128,21 @@ else
     warn "SIP" "Unreadable"
 fi
 
-ROOTSTATUS=$(csrutil authenticated-root status 2>/dev/null)
-if check_contains "$ROOTSTATUS" "enabled"; then
-    ok "Authenticated Root" "Enabled"
+if [ "$MACOS_MAJOR" -ge 11 ] || [ "$MACOS_MAJOR" -eq 10 -a "$MACOS_MINOR" -ge 15 ]; then
+    ROOTSTATUS=$(csrutil authenticated-root status 2>/dev/null)
+    if check_contains "$ROOTSTATUS" "enabled"; then
+        ok "Authenticated Root" "Enabled"
+    else
+        fail "Authenticated Root" "Disabled"
+    fi
 else
-    fail "Authenticated Root" "Disabled"
+    info "Authenticated Root" "Not supported on this macOS"
 fi
 
-LINEINFO=$(system_profiler SPStorageDataType 2>/dev/null | awk '/Mount Point: \/$/{x=NR+2}(NR==x)')
-W=$(echo "$LINEINFO" | grep -o 'Writable: *[A-Za-z]*' | awk '{print $2}')
-if [ "$W" = "No" ]; then
+# Sprawdzenie, czy wolumin systemowy jest tylko do odczytu (lepsza metoda)
+if mount | grep "on / " | grep -q "read-only"; then
     ok "System Volume" "Read-only"
-elif [ "$W" = "Yes" ]; then
+elif mount | grep "on / " | grep -q "rw"; then
     fail "System Volume" "Writable"
 else
     warn "System Volume" "Unknown"
@@ -175,7 +177,8 @@ fi
 
 print_section "Privacy"
 
-ANA1=$(defaults read /Library/Application\ Support/CrashReporter/DiagnosticMessagesHistory.plist AutoSubmit 2>/dev/null)
+# Poprawka: dodano sudo dla obu odczytów
+ANA1=$(sudo defaults read /Library/Application\ Support/CrashReporter/DiagnosticMessagesHistory.plist AutoSubmit 2>/dev/null)
 if [ "$ANA1" = "1" ]; then
     fail "Diagnostic Uploads" "Enabled"
 elif [ "$ANA1" = "0" ]; then
@@ -231,9 +234,7 @@ else
     fail "Autologin" "Enabled"
 fi
 
-
 RESULT=$(defaults -currentHost read com.apple.controlcenter AirplayReceiverEnabled 2>/dev/null)
-
 if [ "$RESULT" = "0" ]; then
     ok "AirPlay Receiver" "Disabled"
 else
@@ -243,50 +244,46 @@ fi
 RESULT=$(sudo find /private/var/db/locationd/Library/Preferences/ByHost \
 -name "com.apple.locationd.*.plist" \
 -exec defaults read {} LocationServicesEnabled \; 2>/dev/null | grep -c 1)
-
 if [ "$RESULT" = "0" ]; then
     ok "Location Services" "Disabled"
 else
     fail "Location Services" "Enabled"
 fi
 
-
-
-
-
-
-
-
-
-RESULT=$(sysadminctl -screenLock status 2>&1)
-if check_contains "$RESULT" "screenLock is off"; then
+# POPRAWIONE sprawdzanie blokady ekranu (zamiast sysadminctl -screenLock)
+ASK_PASS=$(defaults read com.apple.screensaver askForPassword 2>/dev/null)
+DELAY=$(defaults read com.apple.screensaver askForPasswordDelay 2>/dev/null)
+if [ "$ASK_PASS" = "1" ]; then
+    ok "Screen Lock" "Enabled (delay ${DELAY:-0} sec)"
+elif [ "$ASK_PASS" = "0" ]; then
     fail "Screen Lock" "Disabled"
-elif check_contains "$RESULT" "screenLock delay is"; then
-    DELAY=$(echo "$RESULT" | grep -o '[0-9]\+' | head -1)
-    ok "Screen Lock" "Enabled ($DELAY sec)"
 else
-    warn "Screen Lock" "Unknown"
+    warn "Screen Lock" "Unknown (default may be enabled)"
 fi
 
 RESULT=$(bioutil -r 2>&1)
-UNLOCK=$(echo "$RESULT" | grep -oE "Biometrics for unlock: [0-9]" | grep -oE "[0-9]")
-UNLOCK_EFF=$(echo "$RESULT" | grep -oE "Effective biometrics for unlock: [0-9]" | grep -oE "[0-9]")
-APPLEPAY=$(echo "$RESULT" | grep -oE "Biometrics for ApplePay: [0-9]" | grep -oE "[0-9]")
-APPLEPAY_EFF=$(echo "$RESULT" | grep -oE "Effective biometrics for ApplePay: [0-9]" | grep -oE "[0-9]")
-
-if [ "$UNLOCK" = "0" ] && [ "$UNLOCK_EFF" = "0" ] && [ "$APPLEPAY" = "0" ] && [ "$APPLEPAY_EFF" = "0" ]; then
-    warn "Touch ID" "Disabled"
+if echo "$RESULT" | grep -q "Touch ID does not exist"; then
+    info "Touch ID" "Not available"
 else
-    if [ "$UNLOCK" -ge 1 ] && [ "$UNLOCK" -le 5 ] && [ "$UNLOCK_EFF" -ge 1 ] && [ "$UNLOCK_EFF" -le 5 ]; then
-        ok "Touch ID Unlock" "Enabled"
-    else
-        fail "Touch ID Unlock" "Disabled"
-    fi
+    UNLOCK=$(echo "$RESULT" | grep -oE "Biometrics for unlock: [0-9]" | grep -oE "[0-9]")
+    UNLOCK_EFF=$(echo "$RESULT" | grep -oE "Effective biometrics for unlock: [0-9]" | grep -oE "[0-9]")
+    APPLEPAY=$(echo "$RESULT" | grep -oE "Biometrics for ApplePay: [0-9]" | grep -oE "[0-9]")
+    APPLEPAY_EFF=$(echo "$RESULT" | grep -oE "Effective biometrics for ApplePay: [0-9]" | grep -oE "[0-9]")
 
-    if [ "$APPLEPAY" -ge 1 ] && [ "$APPLEPAY" -le 5 ] && [ "$APPLEPAY_EFF" -ge 1 ] && [ "$APPLEPAY_EFF" -le 5 ]; then
-        fail "Touch ID Apple Pay" "Enabled"
+    if [ "$UNLOCK" = "0" ] && [ "$UNLOCK_EFF" = "0" ] && [ "$APPLEPAY" = "0" ] && [ "$APPLEPAY_EFF" = "0" ]; then
+        warn "Touch ID" "Disabled"
     else
-        ok "Touch ID Apple Pay" "Disabled"
+        if [ "$UNLOCK" -ge 1 ] && [ "$UNLOCK" -le 5 ] && [ "$UNLOCK_EFF" -ge 1 ] && [ "$UNLOCK_EFF" -le 5 ]; then
+            ok "Touch ID Unlock" "Enabled"
+        else
+            fail "Touch ID Unlock" "Disabled"
+        fi
+
+        if [ "$APPLEPAY" -ge 1 ] && [ "$APPLEPAY" -le 5 ] && [ "$APPLEPAY_EFF" -ge 1 ] && [ "$APPLEPAY_EFF" -le 5 ]; then
+            fail "Touch ID Apple Pay" "Enabled"
+        else
+            ok "Touch ID Apple Pay" "Disabled"
+        fi
     fi
 fi
 
@@ -319,27 +316,39 @@ fi
 
 print_section "Updates & Time"
 
-RESULT=$(softwareupdate -l 2>&1)
-if check_contains "$RESULT" "No new software available"; then
+# Sprawdzenie aktualizacji systemu - z ostrzeżeniem o wymaganym internecie
+echo -e "${GRAY}Checking for updates (requires internet connection)...${NC}"
+UPDATE_OUTPUT=$(softwareupdate -l 2>&1)
+if check_contains "$UPDATE_OUTPUT" "No new software available"; then
     ok "System Updates" "Up to date"
+elif check_contains "$UPDATE_OUTPUT" "Unable to check for updates" || check_contains "$UPDATE_OUTPUT" "offline"; then
+    warn "System Updates" "Check failed (no internet?)"
 else
-    fail "System Updates" "Available"
+    UPDATE_COUNT=$(echo "$UPDATE_OUTPUT" | grep -c "recommended\|restart" || true)
+    if [ "$UPDATE_COUNT" -gt 0 ]; then
+        fail "System Updates" "Available ($UPDATE_COUNT updates)"
+    else
+        warn "System Updates" "Unknown"
+    fi
 fi
 
-RESULT=$(defaults read /Library/Preferences/com.apple.SoftwareUpdate 2>&1)
-if echo "$RESULT" | grep -q "AutomaticDownload = 1"; then
+# Poprawione odczytywanie ustawień aktualizacji - bezpośrednie klucze
+AUTO_DOWNLOAD=$(defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload 2>/dev/null)
+if [ "$AUTO_DOWNLOAD" = "1" ]; then
     ok "Auto Download Updates" "Enabled"
 else
     fail "Auto Download Updates" "Disabled"
 fi
 
-if echo "$RESULT" | grep -q "AutomaticallyInstallMacOSUpdates = 1"; then
+INSTALL_MACOS=$(defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>/dev/null)
+if [ "$INSTALL_MACOS" = "1" ]; then
     ok "Install macOS Updates" "Enabled"
 else
     fail "Install macOS Updates" "Disabled"
 fi
 
-if echo "$RESULT" | grep -q "CriticalUpdateInstall = 1"; then
+CRITICAL_UPDATES=$(defaults read /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall 2>/dev/null)
+if [ "$CRITICAL_UPDATES" = "1" ]; then
     ok "Critical Updates" "Enabled"
 else
     fail "Critical Updates" "Disabled"
@@ -409,11 +418,17 @@ fi
 
 print_section "Sharing & Remote Access"
 
-COUNT=$(sudo launchctl list 2>/dev/null | grep -c com.apple.screensharing)
-if [ "$COUNT" = "0" ]; then
+# Poprawione sprawdzanie Screen Sharing przez launchctl print-disabled
+SS_DISABLED=$(sudo launchctl print-disabled system 2>/dev/null | grep '"com.apple.screensharing" => true')
+if [ -n "$SS_DISABLED" ]; then
     ok "Screen Sharing" "Disabled"
 else
-    fail "Screen Sharing" "Enabled"
+    # dodatkowe sprawdzenie czy w ogóle załadowany
+    if sudo launchctl list 2>/dev/null | grep -q com.apple.screensharing; then
+        fail "Screen Sharing" "Enabled"
+    else
+        ok "Screen Sharing" "Disabled"
+    fi
 fi
 
 RESULT=$(sudo launchctl list 2>/dev/null | grep smbd)
@@ -441,11 +456,23 @@ else
     warn "Remote Login" "Unknown"
 fi
 
-RESULT=$(sudo ps -ef | grep -e ARDAgent | grep -v grep)
-if [ -z "$RESULT" ]; then
-    ok "Remote Management" "Disabled"
+# Poprawione sprawdzanie Remote Management (ARDAgent)
+if [ -f "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart" ]; then
+    RM_STATUS=$(sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -check 2>&1)
+    if echo "$RM_STATUS" | grep -q "Enabled: 0"; then
+        ok "Remote Management" "Disabled"
+    elif echo "$RM_STATUS" | grep -q "Enabled: 1"; then
+        fail "Remote Management" "Enabled"
+    else
+        warn "Remote Management" "Unknown"
+    fi
 else
-    fail "Remote Management" "Enabled"
+    # fallback - sprawdzenie procesu
+    if sudo ps -ef | grep -v grep | grep -q ARDAgent; then
+        fail "Remote Management" "Possibly enabled (ARDAgent running)"
+    else
+        ok "Remote Management" "Disabled (no kickstart)"
+    fi
 fi
 
 RESULT=$(sudo systemsetup -getremoteappleevents 2>&1)
@@ -530,11 +557,8 @@ echo "If the list includes extensions that are no longer in use or whose origin 
 echo -e "Use: ${GREEN}sudo systemextensionsctl uninstall${NC} <TEAM_ID> <BUNDLE_ID>"
 echo
 
-
 print_section "Summary"
 printf "%-30s %s\n" "Passed" "$PASS_COUNT"
 printf "%-30s %s\n" "Warnings" "$WARN_COUNT"
 printf "%-30s %s\n" "Failures" "$FAIL_COUNT"
 echo
-
-
