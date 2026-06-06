@@ -28,8 +28,8 @@ This toolkit consists of two scripts:
 ### Step 1 — Run the audit
 
 ```bash
-chmod +x test1.sh
-./test1.sh
+chmod +x auditMAC.sh
+./auditMAC.sh
 ```
 
 The script will:
