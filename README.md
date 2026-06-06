@@ -1,48 +1,151 @@
-# macOS Security Audit Tool
+# 🔒 macOS Security Audit
 
-Read-only macOS security auditing and posture assessment script.
+A Bash-based security auditing toolkit for macOS that checks system hardening settings against CIS Benchmark recommendations and generates JSON/HTML reports.
 
-The tool does NOT modify system configuration.
-It performs local security checks and reports:
-- enabled protections
-- insecure settings
-- exposed services
-- privacy-impacting features
+> Created by **Bartłomiej Pogwizd** · [youtube.com/pTech](https://youtube.com/pTech)
 
-## Features
+---
 
-- Firewall checks
-- SIP / Secure Boot validation
-- FileVault verification
-- Sharing & remote access audit
-- Privacy configuration checks
-- System service inspection
+## Overview
 
-## Preview
+This toolkit consists of two scripts:
 
-![Preview](preview.png)
+- **`auditMAC.sh`** — runs the full security audit and outputs results to the terminal and a TSV data file
+- **`generate_reports.sh`** — converts the TSV data file into a JSON report and a styled HTML report
 
-## Usage
-
-```bash
-chmod +x auditMAC.sh
-./auditMAC.sh
-```
+---
 
 ## Requirements
 
-- macOS
-- Administrator privileges (sudo)
+- macOS 11 (Big Sur) or newer — tested up to macOS 15 Sequoia
+- Bash 3.2+ (pre-installed on macOS)
+- `sudo` access (required for several checks)
 
-## Author
+---
 
-Bartłomiej Pogwizd  
-YouTube: [pTech](https://youtube.com/@pTech-pl)
+## Usage
 
-## Disclaimer
+### Step 1 — Run the audit
 
-This script is provided for educational and auditing purposes only.
-This tool does not modify system settings.
-It performs read-only local security auditing.
-Always review scripts before running them with elevated privileges.
-The author is not responsible for any damage or misconfiguration caused by the use of this script.
+```bash
+chmod +x test1.sh
+./test1.sh
+```
+
+The script will:
+- prompt for your `sudo` password (used locally only, never stored)
+- run ~50 security checks across 10 categories
+- print colour-coded results to the terminal
+- save raw results to a temporary TSV file (path shown at the end)
+
+### Step 2 — Generate reports
+
+```bash
+chmod +x generate_reports.sh
+./generate_reports.sh /tmp/macos_audit_XXXXXX.tsv
+```
+
+This produces two files in the current directory:
+- `macos_security_report.json`
+- `macos_security_report.html`
+
+You can specify custom output paths:
+
+```bash
+./generate_reports.sh /tmp/macos_audit_XXXXXX.tsv my_report.json my_report.html
+```
+
+---
+
+## What Gets Checked
+
+| Category | Checks |
+|---|---|
+| **System Security** | Firewall, SIP, Secure Boot, Gatekeeper, FileVault, Firmware Password, Authenticated Root |
+| **Privacy** | Diagnostic uploads, Siri data sharing, Location Services, AirPlay Receiver, Screen Lock, Guest Account, Autologin |
+| **Updates & Time** | Pending updates, Auto-download, Critical updates, Network Time, Wake-on-Network |
+| **Sharing & Remote Access** | Screen Sharing, SMB, Printer Sharing, Remote Login, Remote Management, AirDrop, Handoff |
+| **System Services** | tftpd, nfsd, httpd, uucp, sshd |
+| **Users & Privileges** | Admin accounts, current user role, Root account status |
+| **Network & Ports** | Open listening ports (IPv4/IPv6) |
+| **Startup Items** | LaunchAgents and LaunchDaemons (system and user) |
+| **SSH Hardening** | PermitRootLogin, PasswordAuthentication, PubkeyAuthentication, AllowUsers |
+| **System Extensions** | Active/waiting/terminated kernel extensions |
+
+---
+
+## Output Example
+
+```
+========================================
+macOS Security / Audit Report
+Author: Bartłomiej Pogwizd / youtube.com/pTech
+Version: 2.5
+========================================
+
+System Security
+----------------------------------------
+Firewall                       OK       Enabled
+SIP                            OK       Enabled
+FileVault                      FAIL     Disabled
+Gatekeeper                     OK       Enabled
+...
+
+Security Score                 72/100
+Risk Level:       Medium
+Passed                         31
+Warnings                       4
+Failures                       8
+```
+
+Status legend:
+
+| Status | Meaning |
+|---|---|
+| `OK` | Setting meets the recommended value |
+| `WARN` | Setting could not be determined or is a grey area |
+| `FAIL` | Setting does not meet the recommendation |
+| `INFO` | Informational only, no pass/fail judgement |
+
+---
+
+## Security Score
+
+The score is calculated as:
+
+```
+score = (passed × 100 + warnings × 50) / total_checks
+```
+
+| Score | Risk Level |
+|---|---|
+| 80–100 | 🟢 Low |
+| 50–79 | 🟡 Medium |
+| 0–49 | 🔴 High |
+
+---
+
+## CIS Benchmark Mapping
+
+Every check in the HTML/JSON report is tagged with a CIS macOS Benchmark ID (e.g. `2.1.1` for Firewall, `2.2.1` for FileVault). This makes it easy to cross-reference the official CIS documentation for remediation guidance.
+
+---
+
+## Notes
+
+- The audit is **read-only** — it never modifies any system settings
+- `sudo` is used only for commands that require elevated privileges (e.g. `fdesetup`, `systemsetup`, `launchctl`)
+- Temporary files are created under `/tmp` with `umask 077` and are always cleaned up on exit, even on error or Ctrl+C
+- Some checks (e.g. Touch ID) cannot be automated and are flagged as `INFO` with instructions to verify manually
+
+---
+
+## License
+
+MIT — feel free to use, modify, and share.
+
+---
+
+## Contributing
+
+Pull requests and issues are welcome. If a check produces incorrect results on your macOS version, please open an issue and include the output of `sw_vers`.
