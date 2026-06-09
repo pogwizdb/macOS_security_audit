@@ -801,9 +801,19 @@ printf "%-30s %s\n" "Warnings" "$WARN_COUNT"
 printf "%-30s %s\n" "Failures" "$FAIL_COUNT"
 echo
 
-echo -e "${BLUE}Audit data saved to: ${DATA_FILE}${NC}"
-echo -e "${BLUE}To generate JSON/HTML report, run:${NC}"
-echo -e "${GREEN}  ./generate_reports.sh \"${DATA_FILE}\"${NC}"
+echo -e "${BLUE}Generating JSON/HTML security reports...${NC}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GEN_SCRIPT="$SCRIPT_DIR/generate_reports.sh"
+
+if [ -f "$GEN_SCRIPT" ] && [ -x "$GEN_SCRIPT" ]; then
+    "$GEN_SCRIPT" "$DATA_FILE" "macos_security_report.json" "macos_security_report.html"
+    echo -e "${GREEN}✓ Reports saved: macos_security_report.json, macos_security_report.html${NC}"
+else
+    echo -e "${YELLOW}⚠ Warning: generate_reports.sh not found or not executable in $SCRIPT_DIR${NC}"
+    echo -e "${YELLOW}  Raw data was temporarily stored (now removed). No reports generated.${NC}"
+fi
+
 echo
 
 # ============================================================
