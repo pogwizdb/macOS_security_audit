@@ -40,20 +40,12 @@ The script will:
 
 ### Step 2 — Generate reports
 
-```bash
-chmod +x generate_reports.sh
-./generate_reports.sh /tmp/macos_audit_XXXXXX.tsv
-```
+Put files ( auditMAC.sh and generate_reports.sh ) in same folder
+json and html files will show in the folder, they are generate automatically
 
 This produces two files in the current directory:
 - `macos_security_report.json`
 - `macos_security_report.html`
-
-You can specify custom output paths:
-
-```bash
-./generate_reports.sh /tmp/macos_audit_XXXXXX.tsv my_report.json my_report.html
-```
 
 ---
 
