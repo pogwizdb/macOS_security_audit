@@ -77,6 +77,7 @@ fail() {
 }
 
 info() {
+    # INFO wpisy trafiają do TSV/raportów, ale NIE są wliczane do wyniku (score)
     print_row "$1" "INFO" "$2" "$GRAY"
     printf "%s\t%s\t%s\n" "$1" "INFO" "$2" >> "$DATA_FILE"
 }
@@ -134,8 +135,14 @@ echo
 
 # Inicjalizacja sudo i przechwytywanie sygnałów
 sudo -v || exit 1
+
+# Odświeżanie tokenu sudo co 60 s (domyślny timeout to 15 min)
+while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null || exit; done &
+SUDO_KEEPALIVE_PID=$!
+
 cleanup() {
     echo -e "\n${GRAY}Cleaning up temporary files...${NC}"
+    kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     rm -f "$DATA_FILE" 2>/dev/null
     exit
 }
@@ -252,20 +259,16 @@ fi
 # ============================================================
 print_section "Privacy"
 
-# Diagnostic Uploads – z obsługą braku pliku
-DIAG_PLIST="/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"
-if [ -f "$DIAG_PLIST" ]; then
-    ANA1=$(sudo defaults read "$DIAG_PLIST" AutoSubmit 2>/dev/null)
-    if [ "$ANA1" = "0" ]; then
-        ok "Diagnostic Uploads" "Disabled"
-    else
-        fail "Diagnostic Uploads" "Enabled (default)"
-    fi
-else
-    warn "Diagnostic Uploads" "No plist found – assuming enabled (default)"
-fi
 
-# 3rd Party Analytics
+# ============================================================
+# Diagnostic Uploads – test wyłącznie informacyjny
+# ============================================================
+
+
+
+info "Diagnostic Uploads" "Manual verification required: System Settings > Privacy & Security > Analytics & Improvements > Share Mac Analytics"
+
+DIAG_PLIST="/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"
 if [ -f "$DIAG_PLIST" ]; then
     ANA2=$(sudo defaults read "$DIAG_PLIST" ThirdPartyDataSubmit 2>/dev/null)
     if [ "$ANA2" = "0" ]; then
@@ -483,7 +486,7 @@ fi
 
 # AirDrop
 AIRDROP_MODE=$(defaults read ~/Library/Preferences/com.apple.sharingd.plist DiscoverableMode 2>/dev/null)
-AWDL_STATUS=$(ifconfig awdl0 2>/dev/null | grep -c "status: active")
+AWDL_STATUS=$(ifconfig awdl0 2>/dev/null | grep -c "status: active" || true)
 
 if [ "$AIRDROP_MODE" = "Off" ]; then
     ok "AirDrop" "Disabled (DiscoverableMode: Off)"
@@ -811,7 +814,8 @@ if [ -f "$GEN_SCRIPT" ] && [ -x "$GEN_SCRIPT" ]; then
     echo -e "${GREEN}✓ Reports saved: macos_security_report.json, macos_security_report.html${NC}"
 else
     echo -e "${YELLOW}⚠ Warning: generate_reports.sh not found or not executable in $SCRIPT_DIR${NC}"
-    echo -e "${YELLOW}  Raw data was temporarily stored (now removed). No reports generated.${NC}"
+    echo -e "${YELLOW}  Place generate_reports.sh in the same directory and make it executable (chmod +x).${NC}"
+    echo -e "${YELLOW}  Raw audit data file: $DATA_FILE (will be removed on exit).${NC}"
 fi
 
 echo
