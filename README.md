@@ -2,7 +2,7 @@
 
 A Bash-based security auditing toolkit for macOS that checks system hardening settings against CIS Benchmark recommendations and generates JSON/HTML reports.
 
-> Created by **Bartłomiej Pogwizd** · [youtube.com/pTech](https://youtube.com/pTech)
+> Created by **Bartłomiej Pogwizd** · [https://www.youtube.com/@pTech-pl)
 
 ---
 
