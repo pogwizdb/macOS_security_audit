@@ -20,7 +20,7 @@ BOLD='\033[1m'
 GRAY='\033[0;90m'
 NC='\033[0m'
 
-AUTHOR="Author: Bartłomiej Pogwizd / youtube.com/pTech"
+AUTHOR="Author: Bartłomiej Pogwizd / youtube.com/@pTech-pl"
 VERSION="Version: 2.5"
 
 TITLE="macOS Security / Audit Report"
