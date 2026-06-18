@@ -15,6 +15,14 @@ This toolkit consists of two scripts:
 
 ---
 
+## Screenshot
+
+<img width="1903" height="1121" alt="Zrzut ekranu 2026-06-18 o 19 14 06" src="https://github.com/user-attachments/assets/b167b449-8b6f-464b-8257-77afee13b7e4" />
+
+
+---
+
+
 ## Requirements
 
 - macOS 11 (Big Sur) or newer — tested up to macOS 15 Sequoia
