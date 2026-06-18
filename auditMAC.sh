@@ -88,6 +88,88 @@ check_contains() {
     echo "$value" | grep -qi "$needle"
 }
 
+# ---------- Rejestr napraw ----------
+# Każdy wpis: "label|opis|komenda_naprawcza"
+declare -a FIX_REGISTRY=()
+
+register_fix() {
+    # $1 = label (musi zgadzać się z tym w fail()), $2 = opis naprawy, $3 = komenda
+    FIX_REGISTRY+=("$1|$2|$3")
+}
+
+# Wykonaj naprawę po zakończeniu audytu
+run_fixes() {
+    if [ ${#FIX_REGISTRY[@]} -eq 0 ]; then
+        echo
+        echo -e "${BOLD}${GREEN}========================================"
+        echo -e "  AUTO-FIX – Brak problemów do naprawy"
+        echo -e "========================================${NC}"
+        echo -e "${GREEN}✓ Świetnie! Nie wykryto żadnych problemów, które można naprawić automatycznie.${NC}"
+        echo -e "${GRAY}  Sprawdź sekcje oznaczone [WARN] ręcznie, jeśli takie wystąpiły.${NC}"
+        echo
+        return
+    fi
+
+    echo
+    echo -e "${BOLD}${CYAN}========================================"
+    echo -e "  AUTO-FIX – Dostępne naprawy"
+    echo -e "========================================${NC}"
+    echo -e "${YELLOW}Poniższe problemy mogą zostać naprawione automatycznie."
+    echo -e "Każda zmiana wymaga Twojej indywidualnej akceptacji.${NC}"
+    echo
+
+    local fixed=0
+    local skipped=0
+    local failed=0
+    local failed_labels=()
+
+    for entry in "${FIX_REGISTRY[@]}"; do
+        local label="${entry%%|*}"
+        local rest="${entry#*|}"
+        local desc="${rest%%|*}"
+        local cmd="${rest#*|}"
+
+        echo -e "${RED}[FAIL]${NC} ${BOLD}${label}${NC}"
+        echo -e "       Naprawa: ${CYAN}${desc}${NC}"
+        echo -e "       Polecenie: ${GRAY}${cmd}${NC}"
+        printf "       Zastosować? [t/N]: "
+        read -r answer </dev/tty
+        if [[ "$answer" =~ ^[tTyY]$ ]]; then
+            echo -e "       ${YELLOW}Wykonuję...${NC}"
+            if eval "$cmd" 2>/dev/null; then
+                echo -e "       ${GREEN}✓ Naprawiono pomyślnie${NC}"
+                fixed=$((fixed + 1))
+            else
+                echo -e "       ${RED}✗ Zmiana nie doszła do skutku – sprawdź ręcznie lub uruchom jako root${NC}"
+                failed=$((failed + 1))
+                failed_labels+=("$label")
+            fi
+        else
+            echo -e "       ${GRAY}Pominięto${NC}"
+            skipped=$((skipped + 1))
+        fi
+        echo
+    done
+
+    echo -e "${CYAN}----------------------------------------${NC}"
+    echo -e "Naprawiono: ${GREEN}${fixed}${NC}  |  Pominięto: ${YELLOW}${skipped}${NC}  |  Nieudane: ${RED}${failed}${NC}"
+
+    if [ ${#failed_labels[@]} -gt 0 ]; then
+        echo
+        echo -e "${RED}Następujące naprawy nie powiodły się:${NC}"
+        for lbl in "${failed_labels[@]}"; do
+            echo -e "  ${RED}•${NC} ${lbl}"
+        done
+        echo -e "${GRAY}Wskazówka: uruchom skrypt z 'sudo bash auditMAC.sh' jeśli brakuje uprawnień.${NC}"
+    fi
+
+    if [ "$fixed" -gt 0 ]; then
+        echo
+        echo -e "${YELLOW}Zalecane: uruchom skrypt ponownie, aby potwierdzić że zmiany zostały zastosowane.${NC}"
+    fi
+    echo
+}
+
 # Bezpieczny odczyt defaults – jeśli brak klucza lub pliku, zwraca podaną wartość domyślną
 defaults_read_default() {
     local domain="$1"
@@ -161,6 +243,8 @@ if echo "$STATE" | grep -qi "enabled"; then
     ok "Firewall" "Enabled"
 elif echo "$STATE" | grep -qi "disabled"; then
     fail "Firewall" "Disabled"
+    register_fix "Firewall" "Włącz zaporę sieciową" \
+        "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on"
 else
     fail "Firewall" "Cannot determine (check manually)"
 fi
@@ -215,6 +299,8 @@ if echo "$GATEKEEPER" | grep -qi "enabled"; then
     ok "Gatekeeper" "Enabled"
 elif echo "$GATEKEEPER" | grep -qi "disabled"; then
     fail "Gatekeeper" "Disabled"
+    register_fix "Gatekeeper" "Włącz Gatekeeper" \
+        "sudo spctl --master-enable"
 else
     ok "Gatekeeper" "Enabled (default)"
 fi
@@ -275,6 +361,8 @@ if [ -f "$DIAG_PLIST" ]; then
         ok "3rd Party Analytics" "Disabled"
     else
         fail "3rd Party Analytics" "Enabled (default)"
+        register_fix "3rd Party Analytics" "Wyłącz wysyłanie danych do Apple" \
+            "sudo defaults write '/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist' ThirdPartyDataSubmit -bool false"
     fi
 else
     warn "3rd Party Analytics" "No plist found – assuming enabled (default)"
@@ -284,6 +372,8 @@ fi
 ANA3=$(defaults_read_default com.apple.assistant.support "Siri Data Sharing Opt-In Status" "2")
 if [ "$ANA3" = "1" ]; then
     fail "Siri Data Sharing" "Enabled"
+    register_fix "Siri Data Sharing" "Wyłącz udostępnianie danych Siri do Apple" \
+        "defaults write com.apple.assistant.support 'Siri Data Sharing Opt-In Status' -int 2"
 else
     ok "Siri Data Sharing" "Disabled (default)"
 fi
@@ -304,11 +394,15 @@ if echo "$RESULT" | grep -q "No such key\|No such record\|eDSUnknownNodeName"; t
     ok "Root Account" "Disabled"
 else
     fail "Root Account" "Enabled"
+    register_fix "Root Account" "Wyłącz konto root" \
+        "sudo dscl . -create /Users/root AuthenticationAuthority ';DisabledUser;' && sudo passwd -l root 2>/dev/null || true"
 fi
 
 # Root Visible
 if defaults read com.apple.loginwindow ShowRootUser 2>/dev/null | grep -q "^1$"; then
     fail "Root Visible" "Yes"
+    register_fix "Root Visible" "Ukryj konto root na ekranie logowania" \
+        "sudo defaults write com.apple.loginwindow ShowRootUser -bool false"
 else
     ok "Root Visible" "No"
 fi
@@ -319,12 +413,16 @@ if echo "$RESULT" | grep -qi "does not exist"; then
     ok "Autologin" "Disabled"
 else
     fail "Autologin" "Enabled"
+    register_fix "Autologin" "Wyłącz automatyczne logowanie" \
+        "sudo defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true && sudo defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUserUID 2>/dev/null || true"
 fi
 
 # AirPlay Receiver – domyślnie wyłączony (0)
 AP=$(defaults -currentHost read com.apple.controlcenter AirplayReceiverEnabled 2>/dev/null)
 if [ "$AP" = "1" ]; then
     fail "AirPlay Receiver" "Enabled"
+    register_fix "AirPlay Receiver" "Wyłącz AirPlay Receiver" \
+        "defaults -currentHost write com.apple.controlcenter AirplayReceiverEnabled -bool false"
 else
     ok "AirPlay Receiver" "Disabled (default)"
 fi
@@ -335,6 +433,8 @@ if [ -n "$LOCATION_PLIST" ] && [ -f "$LOCATION_PLIST" ]; then
     LOCATION_ENABLED=$(sudo defaults read "$LOCATION_PLIST" LocationServicesEnabled 2>/dev/null)
     if [ "$LOCATION_ENABLED" = "1" ]; then
         fail "Location Services" "Enabled"
+        register_fix "Location Services" "Wyłącz usługi lokalizacji (wymaga restartu locationd)" \
+            "sudo defaults write \"$LOCATION_PLIST\" LocationServicesEnabled -bool false && sudo killall locationd 2>/dev/null || true"
     elif [ "$LOCATION_ENABLED" = "0" ]; then
         ok "Location Services" "Disabled"
     else
@@ -348,6 +448,8 @@ fi
 ASK_PASS=$(defaults_read_default com.apple.screensaver askForPassword "1")
 if [ "$ASK_PASS" = "0" ] || [ "$ASK_PASS" = "false" ] || [ "$ASK_PASS" = "NO" ]; then
     fail "Screen Lock" "Disabled"
+    register_fix "Screen Lock" "Włącz hasło po wyjściu z wygaszacza" \
+        "defaults write com.apple.screensaver askForPassword -int 1 && defaults write com.apple.screensaver askForPasswordDelay -int 5"
 else
     ok "Screen Lock" "Enabled (default)"
 fi
@@ -361,6 +463,8 @@ info "Touch ID Apple Pay" "Manual verification required"
 GUEST=$(sudo defaults read /Library/Preferences/com.apple.loginwindow GuestEnabled 2>/dev/null)
 if [ "$GUEST" = "1" ]; then
     fail "Guest Account" "Enabled"
+    register_fix "Guest Account" "Wyłącz konto gościa" \
+        "sudo defaults write /Library/Preferences/com.apple.loginwindow GuestEnabled -bool false"
 else
     ok "Guest Account" "Disabled (default)"
 fi
@@ -369,6 +473,8 @@ fi
 GUEST_SHARE=$(sudo defaults read /Library/Preferences/SystemConfiguration/com.apple.smb.server AllowGuestAccess 2>/dev/null)
 if [ "$GUEST_SHARE" = "1" ]; then
     fail "Guest Share Access" "Enabled"
+    register_fix "Guest Share Access" "Wyłącz dostęp gościa do udostępniania plików" \
+        "sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server AllowGuestAccess -bool false"
 else
     ok "Guest Share Access" "Disabled (default)"
 fi
@@ -377,6 +483,8 @@ fi
 AUTH_RESULT=$(sudo security authorizationdb read system.preferences 2>&1 | plutil -convert json - -o - 2>&1)
 if echo "$AUTH_RESULT" | grep -q '"shared":true'; then
     fail "Admin Auth for Settings" "Disabled"
+    register_fix "Admin Auth for Settings" "Wymagaj hasła admina do zmiany ustawień systemowych" \
+        "sudo security authorizationdb write system.preferences deny 2>/dev/null || true"
 else
     ok "Admin Auth for Settings" "Enabled (default)"
 fi
@@ -396,6 +504,8 @@ else
     UPDATE_COUNT=$(echo "$UPDATE_OUTPUT" | grep -c "recommended\|restart" || true)
     if [ "$UPDATE_COUNT" -gt 0 ]; then
         fail "System Updates" "Available ($UPDATE_COUNT updates)"
+        register_fix "System Updates" "Zainstaluj dostępne aktualizacje systemowe (może wymagać restartu)" \
+            "sudo softwareupdate -ia --verbose"
     else
         warn "System Updates" "Unknown"
     fi
@@ -406,6 +516,8 @@ if [ "$AUTO_DOWNLOAD" = "1" ]; then
     ok "Auto Download Updates" "Enabled"
 else
     fail "Auto Download Updates" "Disabled"
+    register_fix "Auto Download Updates" "Włącz automatyczne pobieranie aktualizacji" \
+        "sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true"
 fi
 
 INSTALL_MACOS=$(defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>/dev/null)
@@ -413,6 +525,8 @@ if [ "$INSTALL_MACOS" = "1" ]; then
     ok "Install macOS Updates" "Enabled"
 else
     fail "Install macOS Updates" "Disabled"
+    register_fix "Install macOS Updates" "Włącz automatyczną instalację aktualizacji macOS" \
+        "sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true"
 fi
 
 CRITICAL_UPDATES=$(defaults read /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall 2>/dev/null)
@@ -420,6 +534,8 @@ if [ "$CRITICAL_UPDATES" = "1" ]; then
     ok "Critical Updates" "Enabled"
 else
     fail "Critical Updates" "Disabled"
+    register_fix "Critical Updates" "Włącz automatyczną instalację krytycznych aktualizacji" \
+        "sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true"
 fi
 
 RESULT=$(sudo systemsetup -getusingnetworktime 2>&1)
@@ -427,6 +543,8 @@ if echo "$RESULT" | grep -qi "Network Time: On"; then
     ok "Network Time" "Enabled"
 elif echo "$RESULT" | grep -qi "Network Time: Off"; then
     fail "Network Time" "Disabled"
+    register_fix "Network Time" "Włącz synchronizację czasu przez sieć" \
+        "sudo systemsetup -setusingnetworktime on"
 else
     warn "Network Time" "Unknown"
 fi
@@ -437,6 +555,8 @@ if [ "$NETWORK" = "1" ]; then
     ok "Network Metadata" "Blocked"
 elif [ "$NETWORK" = "0" ]; then
     fail "Network Metadata" "Allowed (default)"
+    register_fix "Network Metadata" "Zablokuj zapis metadanych na dyski sieciowe" \
+        "defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true"
 else
     warn "Network Metadata" "Not set (default allowed) – may not be respected on macOS 14+"
 fi
@@ -447,6 +567,8 @@ if [ "$USB" = "1" ]; then
     ok "USB Metadata" "Blocked"
 elif [ "$USB" = "0" ]; then
     fail "USB Metadata" "Allowed (default)"
+    register_fix "USB Metadata" "Zablokuj zapis metadanych na dyski USB" \
+        "defaults write com.apple.desktopservices DSDontWriteUSBStores -bool true"
 else
     warn "USB Metadata" "Not set (default allowed) – may not be respected on macOS 14+"
 fi
@@ -456,6 +578,8 @@ if echo "$RESULT" | grep -qi "Wake On Network Access: Off"; then
     ok "Wake on Network" "Disabled"
 elif echo "$RESULT" | grep -qi "Wake On Network Access: On"; then
     fail "Wake on Network" "Enabled"
+    register_fix "Wake on Network" "Wyłącz budzenie przez sieć" \
+        "sudo systemsetup -setwakeonnetworkaccess off"
 else
     warn "Wake on Network" "Unknown"
 fi
@@ -465,6 +589,8 @@ if [ "$SUM" = "0" ]; then
     ok "WOMP" "Disabled"
 else
     fail "WOMP" "Enabled"
+    register_fix "WOMP" "Wyłącz Wake on Magic Packet" \
+        "sudo pmset -a womp 0"
 fi
 
 # Handoff – sprawdzenie obu kluczy
@@ -474,6 +600,8 @@ if [ "$HANDOFF_ADV" = "0" ] && [ "$HANDOFF_RECV" = "0" ]; then
     ok "Handoff" "Disabled"
 else
     fail "Handoff" "Enabled (default) – advertising: ${HANDOFF_ADV:-1}, receiving: ${HANDOFF_RECV:-1}"
+    register_fix "Handoff" "Wyłącz Handoff (reklama i odbiór aktywności)" \
+        "defaults -currentHost write com.apple.coreservices.useractivityd ActivityAdvertisingAllowed -bool false && defaults -currentHost write com.apple.coreservices.useractivityd ActivityReceivingAllowed -bool false"
 fi
 
 # Universal Control
@@ -482,6 +610,8 @@ if [ "$UC" = "1" ]; then
     ok "Universal Control" "Disabled"
 else
     fail "Universal Control" "Enabled (default)"
+    register_fix "Universal Control" "Wyłącz Universal Control" \
+        "defaults -currentHost write com.apple.universalcontrol Disable -bool true"
 fi
 
 # AirDrop
@@ -492,6 +622,8 @@ if [ "$AIRDROP_MODE" = "Off" ]; then
     ok "AirDrop" "Disabled (DiscoverableMode: Off)"
 elif [ "$AIRDROP_MODE" = "Contacts Only" ] || [ "$AIRDROP_MODE" = "Everyone" ]; then
     fail "AirDrop" "Enabled (DiscoverableMode: $AIRDROP_MODE)"
+    register_fix "AirDrop" "Wyłącz AirDrop (ustaw tryb Off)" \
+        "defaults write ~/Library/Preferences/com.apple.sharingd.plist DiscoverableMode -string 'Off' && killall sharingd 2>/dev/null || true"
 else
     if [ "$AWDL_STATUS" -gt 0 ]; then
         warn "AirDrop" "No DiscoverableMode set, AWDL active – verify manually"
@@ -511,6 +643,8 @@ if [ -n "$SS_DISABLED" ]; then
 else
     if sudo launchctl list 2>/dev/null | grep -q com.apple.screensharing; then
         fail "Screen Sharing" "Enabled"
+        register_fix "Screen Sharing" "Wyłącz udostępnianie ekranu" \
+            "sudo launchctl disable system/com.apple.screensharing && sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true"
     else
         ok "Screen Sharing" "Disabled"
     fi
@@ -518,6 +652,8 @@ fi
 
 if sudo launchctl list 2>/dev/null | grep -q smbd; then
     fail "SMB Sharing" "Enabled"
+    register_fix "SMB Sharing" "Wyłącz udostępnianie plików SMB" \
+        "sudo launchctl stop com.apple.smbd && sudo launchctl disable system/com.apple.smbd"
 else
     ok "SMB Sharing" "Disabled"
 fi
@@ -525,6 +661,8 @@ fi
 CUPS_OUT=$(sudo cupsctl 2>/dev/null | grep "_share_printers")
 if echo "$CUPS_OUT" | grep -q "_share_printers=1"; then
     fail "Printer Sharing" "Enabled"
+    register_fix "Printer Sharing" "Wyłącz udostępnianie drukarek przez CUPS" \
+        "sudo cupsctl --no-share-printers"
 else
     ok "Printer Sharing" "Disabled (default)"
 fi
@@ -534,6 +672,8 @@ if echo "$RESULT" | grep -qi "Remote Login: Off"; then
     ok "Remote Login" "Disabled"
 elif echo "$RESULT" | grep -qi "Remote Login: On"; then
     fail "Remote Login" "Enabled"
+    register_fix "Remote Login" "Wyłącz zdalny login (SSH)" \
+        "sudo systemsetup -setremotelogin off"
 else
     warn "Remote Login" "Unknown"
 fi
@@ -545,11 +685,17 @@ if [ -f "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Res
         ok "Remote Management" "Disabled"
     elif echo "$RM_STATUS" | grep -qi "Enabled: 1"; then
         fail "Remote Management" "Enabled"
+        register_fix "Remote Management" "Wyłącz Remote Management (ARD)" \
+            "sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop"
     else
         if pgrep -q ARDAgent; then
             fail "Remote Management" "Enabled (ARDAgent running)"
+            register_fix "Remote Management" "Wyłącz Remote Management (ARD)" \
+                "sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop"
         elif [ -f "/var/db/RemoteManagement/com.apple.RemoteManagement.plist" ]; then
             fail "Remote Management" "Enabled (config present)"
+            register_fix "Remote Management" "Wyłącz Remote Management (ARD)" \
+                "sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop"
         else
             ok "Remote Management" "Disabled (assumed)"
         fi
@@ -557,6 +703,8 @@ if [ -f "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Res
 else
     if pgrep -q ARDAgent; then
         fail "Remote Management" "Enabled (ARDAgent running)"
+        register_fix "Remote Management" "Zatrzymaj ARDAgent" \
+            "sudo pkill ARDAgent 2>/dev/null || true"
     else
         ok "Remote Management" "Disabled (no kickstart)"
     fi
@@ -567,6 +715,8 @@ if echo "$RESULT" | grep -qi "Remote Apple Events: Off"; then
     ok "Remote Apple Events" "Disabled"
 elif echo "$RESULT" | grep -qi "Remote Apple Events: On"; then
     fail "Remote Apple Events" "Enabled"
+    register_fix "Remote Apple Events" "Wyłącz zdalne Apple Events" \
+        "sudo systemsetup -setremoteappleevents off"
 else
     warn "Remote Apple Events" "Unknown"
 fi
@@ -576,17 +726,23 @@ if is_service_disabled "com.apple.AEServer"; then
     ok "AEServer Daemon" "Disabled"
 else
     fail "AEServer Daemon" "Enabled"
+    register_fix "AEServer Daemon" "Wyłącz AEServer (Apple Events daemon)" \
+        "sudo launchctl disable system/com.apple.AEServer && sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.AEServer.plist 2>/dev/null || true"
 fi
 
 # Content Caching
 if defaults read /Library/Preferences/com.apple.AssetCache.plist Activated 2>/dev/null | grep -q "1"; then
     fail "Content Caching" "Enabled"
+    register_fix "Content Caching" "Wyłącz buforowanie treści" \
+        "sudo AssetCacheManagerUtil deactivate 2>/dev/null || sudo defaults write /Library/Preferences/com.apple.AssetCache.plist Activated -bool false"
 else
     ok "Content Caching" "Disabled (default)"
 fi
 
 if sudo launchctl list 2>/dev/null | grep -q com.apple.ODSAgent; then
     fail "ODSAgent" "Enabled"
+    register_fix "ODSAgent" "Wyłącz Open Directory Services Agent" \
+        "sudo launchctl disable system/com.apple.ODSAgent && sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.ODSAgent.plist 2>/dev/null || true"
 else
     ok "ODSAgent" "Disabled"
 fi
@@ -594,6 +750,8 @@ fi
 MEDIA=$(defaults read com.apple.amp.mediasharingd home-sharing-enabled 2>/dev/null)
 if [ "$MEDIA" = "1" ]; then
     fail "Media Sharing" "Enabled"
+    register_fix "Media Sharing" "Wyłącz udostępnianie multimediów" \
+        "defaults write com.apple.amp.mediasharingd home-sharing-enabled -bool false && killall mediasharingd 2>/dev/null || true"
 else
     ok "Media Sharing" "Disabled (default)"
 fi
@@ -610,6 +768,8 @@ check_service_disabled() {
         ok "$label" "Disabled"
     else
         fail "$label" "Enabled"
+        register_fix "$label" "Wyłącz usługę $service" \
+            "sudo launchctl disable system/$service && sudo launchctl unload -w /System/Library/LaunchDaemons/$service.plist 2>/dev/null || true"
     fi
 }
 
@@ -724,6 +884,8 @@ if echo "$REMOTE_LOGIN_STATUS" | grep -qi "Remote Login: On"; then
                 ok "SSH: PermitRootLogin" "$PERMIT_ROOT"
             else
                 fail "SSH: PermitRootLogin" "$PERMIT_ROOT (should be no/prohibit-password)"
+                register_fix "SSH: PermitRootLogin" "Ustaw PermitRootLogin no w /etc/ssh/sshd_config" \
+                    "sudo sed -i '' 's/^.*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config || echo 'PermitRootLogin no' | sudo tee -a /etc/ssh/sshd_config"
             fi
 
             PASS_AUTH=$(echo "$SSH_CONFIG" | grep -i "^passwordauthentication" | awk '{print $2}')
@@ -733,6 +895,8 @@ if echo "$REMOTE_LOGIN_STATUS" | grep -qi "Remote Login: On"; then
                 ok "SSH: PasswordAuthentication" "Disabled"
             else
                 fail "SSH: PasswordAuthentication" "Enabled (use keys instead)"
+                register_fix "SSH: PasswordAuthentication" "Wyłącz logowanie hasłem SSH (ustaw no)" \
+                    "sudo sed -i '' 's/^.*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' | sudo tee -a /etc/ssh/sshd_config"
             fi
 
             PUBKEY_AUTH=$(echo "$SSH_CONFIG" | grep -i "^pubkeyauthentication" | awk '{print $2}')
@@ -742,6 +906,8 @@ if echo "$REMOTE_LOGIN_STATUS" | grep -qi "Remote Login: On"; then
                 ok "SSH: PubkeyAuthentication" "Enabled"
             else
                 fail "SSH: PubkeyAuthentication" "Disabled (should be yes)"
+                register_fix "SSH: PubkeyAuthentication" "Włącz autentykację kluczem publicznym SSH" \
+                    "sudo sed -i '' 's/^.*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config || echo 'PubkeyAuthentication yes' | sudo tee -a /etc/ssh/sshd_config"
             fi
 
             ALLOW_USERS=$(echo "$SSH_CONFIG" | grep -i "^allowusers" | sed 's/allowusers //i')
@@ -819,6 +985,11 @@ else
 fi
 
 echo
+
+# ============================================================
+# 12. AUTO-FIX
+# ============================================================
+run_fixes
 
 # ============================================================
 # KONIEC
