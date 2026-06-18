@@ -37,6 +37,8 @@ The script will:
 - run ~50 security checks across 10 categories
 - print colour-coded results to the terminal
 - save raw results to a temporary TSV file (path shown at the end)
+- automaticly repair failures, you need to confirm with y or n with no
+- show auto-fix summary
 
 ### Step 2 — Generate reports
 
